@@ -1,0 +1,12 @@
+{
+  "accessKey": "",
+  "catbox": {
+    "userhash": "PUT_YOUR_CATBOX_USERHASH_HERE"
+  },
+  "imgur": {
+    "clientId": "PUT_YOUR_IMGUR_CLIENT_ID_HERE"
+  },
+  "imgbb": {
+    "apiKey": "PUT_YOUR_IMGBB_API_KEY_HERE"
+  }
+}
