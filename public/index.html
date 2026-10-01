@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Media Uploader</title>
+  <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%232563eb%27/%3E%3Cpath fill=%27white%27 d=%27M44 40H20a8 8 0 0 1-1-15.9A12 12 0 0 1 42 22a9 9 0 0 1 2 18zm-12-14-7 7h5v7h4v-7h5z%27/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script src="setting.js"></script>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-in">
+      <a class="brand" id="brand" href="./">
+        <span class="logo" id="logo"></span>
+        <span id="brandName"></span>
+      </a>
+      <nav class="nav" id="nav"></nav>
+    </div>
+  </div>
+
+  <main class="page" id="app"></main>
+  <footer id="footer"></footer>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ================= Settings =================
+    const S = Object.assign({
+      siteName: "Media Uploader", tagline: "", faviconUrl: "", maxFileSizeMB: 4,
+      apiEndpoint: "/api/upload", footerText: "", hosts: {}
+    }, window.SITE_SETTINGS || {});
+
+    const $ = (id) => document.getElementById(id);
+    const CLOUD = '<svg viewBox="0 0 24 24"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>';
+    const KEYS = ["im", "cbx", "img"];
+
+    // ?im -> Imgur,  ?cbx -> Catbox,  ?img -> ImgBB,  kichu na thakle -> Home
+    const params = new URLSearchParams(location.search);
+    const pageKey = KEYS.find((k) => params.has(k) && S.hosts[k]) || "home";
+    const host = pageKey === "home" ? null : S.hosts[pageKey];
+
+    document.title = host ? host.name + " Upload - " + S.siteName : S.siteName;
+    $("brandName").textContent = S.siteName;
+    $("footer").textContent = S.footerText;
+    $("brand").href = location.pathname;
+
+    // Logo + favicon
+    (function setupLogo() {
+      const logo = $("logo");
+      logo.className = "logo";
+      logo.innerHTML = CLOUD;
+      if (!S.faviconUrl) return;
+      $("favicon").href = S.faviconUrl;
+      const img = document.createElement("img");
+      img.alt = ""; img.src = S.faviconUrl;
+      img.onerror = () => { logo.innerHTML = CLOUD; };
+      logo.innerHTML = "";
+      logo.appendChild(img);
+    })();
+
+    // Nav: Home + 3 page button
+    (function setupNav() {
+      const nav = $("nav");
+      const items = [{ key: "home", label: "Home", href: location.pathname }]
+        .concat(KEYS.filter((k) => S.hosts[k]).map((k) => ({ key: k, label: S.hosts[k].name, href: "?" + k })));
+      items.forEach((it) => {
+        const a = document.createElement("a");
+        a.href = it.href; a.textContent = it.label;
+        if (it.key === pageKey) a.className = "active";
+        nav.appendChild(a);
+      });
+    })();
+
+    // ================= Helpers =================
+    function toast(msg) {
+      const t = $("toast"); t.textContent = msg; t.classList.add("show");
+      clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1800);
+    }
+    function fmtSize(b) {
+      if (b < 1024) return b + " B";
+      if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
+      return (b / 1048576).toFixed(2) + " MB";
+    }
+    async function copy(text) {
+      try { await navigator.clipboard.writeText(text); }
+      catch (e) {
+        const ta = document.createElement("textarea"); ta.value = text;
+        document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+      }
+      toast("Copied!");
+    }
+    const storeKey = (k) => "uploader_links_" + k;
+    function loadLinks(k) { try { return JSON.parse(localStorage.getItem(storeKey(k))) || []; } catch (e) { return []; } }
+    function saveLinks(k, list) { try { localStorage.setItem(storeKey(k), JSON.stringify(list)); } catch (e) {} }
+
+    // Kon host e token set ache (token er man jay na, shudhu true/false)
+    function fetchStatus() {
+      return fetch(S.apiEndpoint).then((r) => r.json()).then((j) => (j && j.hosts) || null).catch(() => null);
+    }
+
+    // ================= HOME =================
+    function renderHome() {
+      const app = $("app");
+      app.innerHTML =
+        '<section class="hero"><div class="logo" id="heroLogo"></div><h1></h1><p class="tagline"></p></section>' +
+        '<div class="grid" id="cards"></div>';
+      $("heroLogo").innerHTML = $("logo").innerHTML;
+      app.querySelector("h1").textContent = S.siteName;
+      app.querySelector(".tagline").textContent = S.tagline;
+
+      const cards = $("cards");
+      const badges = {};
+      KEYS.filter((k) => S.hosts[k]).forEach((k) => {
+        const h = S.hosts[k];
+        const a = document.createElement("a");
+        a.className = "hcard"; a.href = "?" + k;
+        const count = loadLinks(k).length;
+        a.innerHTML =
+          '<div class="ico"></div><h3></h3><p></p>' +
+          '<div class="meta"><span class="cnt"></span><span class="badge" style="display:none"></span></div>' +
+          '<span class="go">Open uploader →</span>';
+        a.querySelector(".ico").textContent = k.toUpperCase();
+        a.querySelector("h3").textContent = h.name;
+        a.querySelector("p").textContent = h.desc || "";
+        a.querySelector(".cnt").textContent = count ? count + " saved link" + (count > 1 ? "s" : "") : "";
+        badges[h.id] = a.querySelector(".badge");
+        cards.appendChild(a);
+      });
+
+      fetchStatus().then((st) => {
+        if (!st) return;
+        Object.keys(badges).forEach((id) => {
+          const b = badges[id];
+          b.style.display = "";
+          b.textContent = st[id] ? "Ready" : "Setup needed";
+          b.className = "badge" + (st[id] ? " ok" : "");
+        });
+      });
+    }
+
+    // ================= UPLOAD PAGE =================
+    function renderUpload() {
+      const app = $("app");
+      app.innerHTML =
+        '<div class="narrow">' +
+          '<div class="page-title"><h1></h1><p class="tagline"></p></div>' +
+          '<div class="banner" id="warn" style="display:none"></div>' +
+          '<div class="card"><label class="drop" id="drop">' + CLOUD +
+            '<strong>Tap to choose files or drag &amp; drop</strong><span id="limitText"></span>' +
+            '<input type="file" id="fileInput" multiple></label></div>' +
+          '<div class="card"><h2>Upload from a link</h2><div class="row">' +
+            '<input type="text" id="urlInput" placeholder="https://example.com/image.jpg">' +
+            '<button id="urlBtn">Upload</button></div></div>' +
+          '<div class="card" id="queueCard" style="display:none"><h2>Uploading</h2><div id="queue"></div></div>' +
+          '<div class="card"><div class="head"><h2>My links</h2><div class="actions">' +
+            '<button class="ghost small" id="copyAll">Copy all</button>' +
+            '<button class="ghost small" id="clearAll">Clear</button></div></div><div id="links"></div></div>' +
+        '</div>';
+
+      app.querySelector("h1").textContent = host.name + " Uploader";
+      app.querySelector(".tagline").textContent = host.desc || "";
+      $("limitText").textContent = "Max " + S.maxFileSizeMB + " MB per file";
+      if (host.accept) $("fileInput").accept = host.accept;
+
+      const KEY = pageKey;
+      const api = S.apiEndpoint + "?host=" + encodeURIComponent(host.id);
+
+      fetchStatus().then((st) => {
+        if (st && !st[host.id]) {
+          const w = $("warn");
+          w.style.display = "";
+          w.textContent = "⚠️ " + host.name + " token is not set in config.json yet. Uploads will fail until you add it.";
+        }
+      });
+
+      // ----- collected links -----
+      function renderLinks() {
+        const list = loadLinks(KEY), box = $("links");
+        box.innerHTML = "";
+        if (!list.length) { box.innerHTML = '<div class="empty">No links yet. Upload something!</div>'; return; }
+        list.forEach((it) => {
+          const row = document.createElement("div");
+          row.className = "item";
+          row.innerHTML = '<div class="thumb"></div><div class="info"><div class="name"></div>' +
+            '<div class="linkrow"><input readonly><button class="small">Copy</button></div></div>';
+          row.querySelector(".name").textContent = it.name;
+          row.querySelector("input").value = it.url;
+          row.querySelector("button").onclick = () => copy(it.url);
+          const th = row.querySelector(".thumb");
+          if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)(\?.*)?$/i.test(it.url)) {
+            const im = document.createElement("img"); im.src = it.url; im.loading = "lazy";
+            im.onerror = () => { im.remove(); th.textContent = "IMG"; };
+            th.appendChild(im);
+          } else {
+            th.textContent = (it.url.split("?")[0].split(".").pop() || "file").slice(0, 4).toUpperCase();
+          }
+          box.appendChild(row);
+        });
+      }
+      function addLink(name, url) {
+        const list = loadLinks(KEY);
+        list.unshift({ name: name, url: url, time: Date.now() });
+        saveLinks(KEY, list.slice(0, 200));
+        renderLinks();
+      }
+      $("copyAll").onclick = () => {
+        const list = loadLinks(KEY);
+        if (!list.length) return toast("No links to copy");
+        copy(list.map((i) => i.url).join("\n"));
+      };
+      $("clearAll").onclick = () => {
+        if (!loadLinks(KEY).length) return;
+        if (confirm("Clear all saved " + host.name + " links from this browser?")) { saveLinks(KEY, []); renderLinks(); }
+      };
+
+      // ----- upload queue -----
+      function hideQueueIfEmpty() { if (!$("queue").children.length) $("queueCard").style.display = "none"; }
+      function addQueueItem(name, size, file) {
+        $("queueCard").style.display = "";
+        const el = document.createElement("div");
+        el.className = "item";
+        el.innerHTML = '<div class="thumb"></div><div class="info"><div class="name"></div>' +
+          '<div class="meta"></div><div class="bar"><i></i></div></div>';
+        el.querySelector(".name").textContent = name;
+        el.querySelector(".meta").textContent = size ? fmtSize(size) : "Link upload";
+        const th = el.querySelector(".thumb");
+        if (file && file.type.indexOf("image/") === 0) {
+          const im = document.createElement("img"); im.src = URL.createObjectURL(file); th.appendChild(im);
+        } else { th.textContent = "FILE"; }
+        $("queue").prepend(el);
+        return {
+          progress: (p) => {
+            el.querySelector(".bar i").style.width = Math.round(p * 100) + "%";
+            el.querySelector(".meta").textContent = Math.round(p * 100) + "%";
+          },
+          done: () => { el.remove(); hideQueueIfEmpty(); },
+          fail: (msg) => {
+            const m = el.querySelector(".meta"); m.textContent = "❌ " + msg; m.classList.add("err");
+            const bar = el.querySelector(".bar"); if (bar) bar.remove();
+            setTimeout(() => { el.remove(); hideQueueIfEmpty(); }, 8000);
+          }
+        };
+      }
+
+      function xhrSend(headers, body, onProgress) {
+        return new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", api);
+          Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]));
+          if (onProgress) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+          xhr.onload = () => {
+            let j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+            if (xhr.status >= 200 && xhr.status < 300 && j && j.success) return resolve(j.url);
+            if (xhr.status === 413) return reject(new Error("File too large for the server"));
+            reject(new Error((j && j.error) || ("HTTP " + xhr.status)));
+          };
+          xhr.onerror = () => reject(new Error("Network error"));
+          xhr.send(body);
+        });
+      }
+
+      async function uploadFile(file) {
+        const q = addQueueItem(file.name, file.size, file);
+        if (file.size > S.maxFileSizeMB * 1024 * 1024) return q.fail("Too big (max " + S.maxFileSizeMB + " MB)");
+        try {
+          const url = await xhrSend(
+            { "Content-Type": "application/octet-stream", "x-filename": encodeURIComponent(file.name) },
+            file, q.progress
+          );
+          q.done(); addLink(file.name, url);
+        } catch (err) { q.fail(err.message); }
+      }
+
+      async function uploadUrl(link) {
+        const name = link.split("/").pop().split("?")[0] || link;
+        const q = addQueueItem(name, 0, null);
+        q.progress(0.5);
+        try {
+          const url = await xhrSend({ "Content-Type": "application/json" }, JSON.stringify({ url: link }));
+          q.done(); addLink(name, url);
+        } catch (err) { q.fail(err.message); }
+      }
+
+      // ----- events -----
+      const drop = $("drop"), input = $("fileInput");
+      input.onchange = () => { Array.from(input.files).forEach(uploadFile); input.value = ""; };
+      ["dragenter", "dragover"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("drag"); }));
+      ["dragleave", "drop"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove("drag"); }));
+      drop.addEventListener("drop", (ev) => Array.from(ev.dataTransfer.files).forEach(uploadFile));
+
+      $("urlBtn").onclick = () => {
+        const v = $("urlInput").value.trim();
+        if (!/^https?:\/\//i.test(v)) return toast("Enter a valid http(s) link");
+        $("urlInput").value = "";
+        uploadUrl(v);
+      };
+      $("urlInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("urlBtn").click(); });
+
+      renderLinks();
+    }
+
+    // ================= Start =================
+    if (host) renderUpload(); else renderHome();
+  </script>
+</body>
+</html>
